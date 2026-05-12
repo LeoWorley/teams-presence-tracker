@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.db
+*.db-journal
+/token_cache.json
+/.env
