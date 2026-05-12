@@ -7,7 +7,7 @@ use tokio::time::sleep;
 
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const SCOPE: &str = "Presence.Read offline_access User.Read openid profile";
+const SCOPE: &str = "Presence.Read Presence.Read.All offline_access User.Read openid profile";
 
 #[derive(Debug, Deserialize)]
 struct DeviceCodeResponse {

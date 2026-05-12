@@ -31,6 +31,10 @@ enum Commands {
         /// Polling interval in seconds
         #[arg(short, long, default_value = "60")]
         interval: u64,
+        /// Comma-separated list of users to track (email or object ID).
+        /// If omitted, tracks your own presence.
+        #[arg(short, long, value_delimiter = ',')]
+        users: Vec<String>,
     },
     /// Show presence history from the database
     History {
@@ -58,12 +62,17 @@ async fn main() -> Result<()> {
     let config = Config::new(cli.client_id)?;
 
     match cli.command {
-        Commands::Run { interval } => {
+        Commands::Run { interval, users } => {
             println!("Starting Teams presence tracker...");
             println!("Data directory: {}", config.data_dir.display());
             println!("Database: {}", config.db_path().display());
+            if !users.is_empty() {
+                println!("Tracking users: {}", users.join(", "));
+            } else {
+                println!("Tracking: your own presence");
+            }
             println!("Press Ctrl+C to stop\n");
-            tracker::run_tracker(&config, interval).await?;
+            tracker::run_tracker(&config, interval, users).await?;
         }
         Commands::History { limit } => {
             let db_path = config.db_path();

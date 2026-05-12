@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use anyhow::Result;
@@ -8,15 +9,32 @@ use crate::config::Config;
 use crate::db::record_presence;
 use crate::graph::{get_presence, Presence};
 
-pub async fn run_tracker(config: &Config, interval_secs: u64) -> Result<()> {
+pub async fn run_tracker(config: &Config, interval_secs: u64, users: Vec<String>) -> Result<()> {
     let db_path = config.db_path();
 
     println!("Authenticating with Microsoft Graph...");
     let mut token = authenticate(&config.client_id, &config.token_cache_path()).await?;
 
-    println!("Fetching initial presence...");
-    let mut last_presence = fetch_and_record(&token, &db_path).await?;
-    print_presence_change(&last_presence, None);
+    let target_users = if users.is_empty() {
+        vec!["me".to_string()]
+    } else {
+        users
+    };
+
+    println!("Fetching initial presence for {} user(s)...", target_users.len());
+    let mut last_states: HashMap<String, Presence> = HashMap::new();
+
+    for user in &target_users {
+        match fetch_and_record(&token, &db_path, user).await {
+            Ok(presence) => {
+                print_presence_change(user, &presence, None);
+                last_states.insert(user.clone(), presence);
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch presence for {}: {}", user, e);
+            }
+        }
+    }
 
     let interval = Duration::from_secs(interval_secs);
 
@@ -28,24 +46,31 @@ pub async fn run_tracker(config: &Config, interval_secs: u64) -> Result<()> {
             token = authenticate(&config.client_id, &config.token_cache_path()).await?;
         }
 
-        match fetch_and_record(&token, &db_path).await {
-            Ok(presence) => {
-                if has_changed(&presence, &last_presence) {
-                    print_presence_change(&presence, Some(&last_presence));
-                    last_presence = presence;
+        for user in &target_users {
+            match fetch_and_record(&token, &db_path, user).await {
+                Ok(presence) => {
+                    let changed = match last_states.get(user) {
+                        Some(last) => has_changed(&presence, last),
+                        None => true,
+                    };
+                    if changed {
+                        print_presence_change(user, &presence, last_states.get(user));
+                        last_states.insert(user.clone(), presence);
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch presence: {}", e);
+                Err(e) => {
+                    tracing::error!("Failed to fetch presence for {}: {}", user, e);
+                }
             }
         }
     }
 }
 
-async fn fetch_and_record(token: &TokenResponse, db_path: &Path) -> Result<Presence> {
-    let presence = get_presence(&token.access_token).await?;
-    let user_id = presence.id.clone().unwrap_or_else(|| "me".to_string());
-    record_presence(db_path, &user_id, &presence)?;
+async fn fetch_and_record(token: &TokenResponse, db_path: &Path, user: &str) -> Result<Presence> {
+    let user_id = if user == "me" { None } else { Some(user) };
+    let presence = get_presence(&token.access_token, user_id).await?;
+    let record_user_id = presence.id.clone().unwrap_or_else(|| user.to_string());
+    record_presence(db_path, &record_user_id, &presence)?;
     Ok(presence)
 }
 
@@ -55,12 +80,14 @@ fn has_changed(a: &Presence, b: &Presence) -> bool {
         || a.status_text() != b.status_text()
 }
 
-fn print_presence_change(presence: &Presence, previous: Option<&Presence>) {
+fn print_presence_change(user: &str, presence: &Presence, previous: Option<&Presence>) {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let user_label = if user == "me" { "You" } else { user };
     if let Some(prev) = previous {
         println!(
-            "[{}] Status changed: {} / {} → {} / {}",
+            "[{}] {} changed: {} / {} → {} / {}",
             now,
+            user_label,
             prev.availability(),
             prev.activity(),
             presence.availability(),
@@ -68,8 +95,9 @@ fn print_presence_change(presence: &Presence, previous: Option<&Presence>) {
         );
     } else {
         println!(
-            "[{}] Current status: {} / {}",
+            "[{}] {} status: {} / {}",
             now,
+            user_label,
             presence.availability(),
             presence.activity()
         );

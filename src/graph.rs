@@ -48,10 +48,14 @@ impl Presence {
     }
 }
 
-pub async fn get_presence(access_token: &str) -> Result<Presence> {
+pub async fn get_presence(access_token: &str, user_id: Option<&str>) -> Result<Presence> {
     let client = Client::new();
+    let url = match user_id {
+        Some(id) => format!("https://graph.microsoft.com/v1.0/users/{}/presence", id),
+        None => "https://graph.microsoft.com/v1.0/me/presence".to_string(),
+    };
     let res = client
-        .get("https://graph.microsoft.com/v1.0/me/presence")
+        .get(&url)
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await

@@ -6,6 +6,7 @@ Unlike the local WebSocket monitor (which only knows if you're in a meeting), th
 
 ## Features
 
+- **Multi-user tracking** — monitor your own presence or a list of colleagues.
 - **OAuth2 Device Code flow** — no client secret needed; you authenticate interactively once and the tool caches refresh tokens.
 - **CSV-based history** — all presence changes are appended to a simple CSV file (no database server required).
 - **CLI commands** — `run`, `history`, and `export`.
@@ -19,9 +20,11 @@ Unlike the local WebSocket monitor (which only knows if you're in a meeting), th
    - **Mobile and desktop applications** platform added with the redirect URI: `https://login.microsoftonline.com/common/oauth2/nativeclient`
    - **API permissions** granted:
      - `Presence.Read` (for your own presence)
+     - `Presence.Read.All` (required to track other users)
      - `offline_access` (to get refresh tokens)
      - `User.Read` (to read your profile)
    - The permissions must be **consented** by the user (or admin) before first run.
+   - **Note:** `Presence.Read.All` almost always requires **admin consent**. If you only track yourself, it is not strictly used, but it is requested in the scope so the app works for both modes.
 
 > You can create the app registration at [https://portal.azure.com](https://portal.azure.com) → **App registrations** → **New registration**.
 
@@ -53,10 +56,18 @@ $env:TEAMS_CLIENT_ID="<YOUR_CLIENT_ID>"
 
 #### `run`
 
-Starts polling your Teams presence every **N** seconds (default: 60).
+Starts polling Teams presence every **N** seconds (default: 60).
 
+**Track yourself:**
 ```bash
  teams-presence-tracker --client-id <YOUR_CLIENT_ID> run --interval 30
+```
+
+**Track multiple users:**
+```bash
+ teams-presence-tracker --client-id <YOUR_CLIENT_ID> run \
+  --users user1@company.com,user2@company.com \
+  --interval 30
 ```
 
 On first run you will see a device-code prompt:
@@ -72,9 +83,9 @@ Open the URL, enter the code, and sign in. The tool caches tokens locally so you
 While running, the tool prints changes like:
 
 ```
-[2026-05-12 09:15:00] Current status: Available / Available
-[2026-05-12 09:22:00] Status changed: Available / Available → Busy / InACall
-[2026-05-12 09:45:00] Status changed: Busy / InACall → Available / Available
+[2026-05-12 09:15:00] You status: Available / Available
+[2026-05-12 09:22:00] user1@company.com changed: Available / Available → Busy / InACall
+[2026-05-12 09:45:00] user2@company.com changed: Away / Away → Available / Available
 ```
 
 #### `history`
