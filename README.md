@@ -70,6 +70,12 @@ Starts polling Teams presence every **N** seconds (default: 60).
   --interval 30
 ```
 
+**With phone dashboard:**
+```bash
+ teams-presence-tracker --client-id <YOUR_CLIENT_ID> run --serve 0.0.0.0:8080
+```
+Then open `http://YOUR_PC_IP:8080` on your phone browser (same WiFi).
+
 On first run you will see a device-code prompt:
 
 ```

@@ -7,6 +7,7 @@ mod auth;
 mod config;
 mod db;
 mod graph;
+mod server;
 mod tracker;
 
 use config::Config;
@@ -35,6 +36,9 @@ enum Commands {
         /// If omitted, tracks your own presence.
         #[arg(short, long, value_delimiter = ',')]
         users: Vec<String>,
+        /// Start a local HTTP dashboard on the given address (e.g. 0.0.0.0:8080)
+        #[arg(long)]
+        serve: Option<String>,
     },
     /// Show presence history from the database
     History {
@@ -62,7 +66,7 @@ async fn main() -> Result<()> {
     let config = Config::new(cli.client_id)?;
 
     match cli.command {
-        Commands::Run { interval, users } => {
+        Commands::Run { interval, users, serve } => {
             println!("Starting Teams presence tracker...");
             println!("Data directory: {}", config.data_dir.display());
             println!("Database: {}", config.db_path().display());
@@ -71,6 +75,17 @@ async fn main() -> Result<()> {
             } else {
                 println!("Tracking: your own presence");
             }
+
+            if let Some(addr) = serve {
+                let db = config.db_path();
+                let addr = addr.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = server::serve(&addr, db).await {
+                        tracing::error!("Server error: {}", e);
+                    }
+                });
+            }
+
             println!("Press Ctrl+C to stop\n");
             tracker::run_tracker(&config, interval, users).await?;
         }
