@@ -28,16 +28,34 @@ Unlike the local WebSocket monitor (which only knows if you're in a meeting), th
 
 > You can create the app registration at [https://portal.azure.com](https://portal.azure.com) → **App registrations** → **New registration**.
 
-## Build
+## Two Ways to Run
+
+This repo contains **two independent tools**:
+
+1. **Rust CLI** — uses Microsoft Graph API (clean, official, but needs Azure AD app).
+2. **Playwright Scraper** — browser automation (no Azure AD app needed, but more fragile).
+
+### Option A: Rust CLI (Graph API)
 
 ```bash
 cargo build --release
 ```
 
-The binary will be at:
+Binary: `target/release/teams-presence-tracker.exe`
 
-- Windows: `target/release/teams-presence-tracker.exe`
-- Linux/macOS: `target/release/teams-presence-tracker`
+### Option B: Playwright Scraper (Browser Automation)
+
+If your organization blocks Azure AD app registrations or `Presence.Read.All`:
+
+```bash
+cd scraper
+pip install -r requirements.txt
+python -m playwright install chromium
+python teams_scraper.py --setup    # one-time login
+python teams_scraper.py            # start scraping
+```
+
+See [`scraper/README.md`](scraper/README.md) for full details.
 
 ## Usage
 
