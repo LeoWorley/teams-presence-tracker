@@ -144,6 +144,48 @@ def scrape_contact_list(page, config) -> list:
     return results
 
 
+def apply_stealth(page):
+    """Remove automation indicators."""
+    page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+        window.chrome = { runtime: {} };
+    """)
+
+
+def wait_for_teams_ready(page, timeout_ms: int = 120000):
+    """Wait until Teams appears to be fully loaded."""
+    indicators = [
+        "[data-tid='app-layout-area']",
+        "[data-tid='search-button']",
+        "button[aria-label*='New chat']",
+        "button[aria-label*='new chat']",
+        ".ts-left-rail",
+        "[data-tid='left-rail']",
+        "[data-tid='chat-list-item']",
+        ".chat-list-item",
+    ]
+    start = time.time()
+    while (time.time() - start) * 1000 < timeout_ms:
+        for sel in indicators:
+            try:
+                if page.locator(sel).first.is_visible(timeout=2000):
+                    return True
+            except Exception:
+                continue
+        time.sleep(2)
+    return False
+
+
+def save_screenshot(page, name: str):
+    """Save a screenshot for debugging."""
+    path = STATE_DIR / f"{name}_{datetime.now().strftime('%H%M%S')}.png"
+    page.screenshot(path=str(path), full_page=True)
+    print(f"📸 Screenshot saved: {path}")
+    return path
+
+
 def login_and_save_state(config):
     """Interactive setup: open browser, let user login manually, save state."""
     print("=" * 60)
@@ -158,18 +200,37 @@ def login_and_save_state(config):
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+    user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
             args=config.get("browser_args", [])
         )
         context = browser.new_context(
-            viewport=config.get("viewport", {"width": 1280, "height": 720})
+            viewport={"width": 1920, "height": 1080},
+            user_agent=user_agent,
         )
         page = context.new_page()
-        page.goto(config["teams_url"])
+        apply_stealth(page)
 
-        input("\n>>> Press ENTER after Teams has fully loaded and you are logged in...")
+        print("\nLoading Teams...")
+        page.goto(config["teams_url"], wait_until="networkidle")
+
+        print("Waiting for Teams to finish loading (up to 2 minutes)...")
+        if not wait_for_teams_ready(page, timeout_ms=120000):
+            print("\n⚠️  Teams seems stuck on the loading screen.")
+            save_screenshot(page, "setup_stuck")
+            print("Common fixes:")
+            print("  - Try reloading the page (F5) in the browser window")
+            print("  - Check if your company blocks Teams Web (conditional access)")
+            print("  - Try logging in with a personal Microsoft account instead")
+            input("\n>>> If Teams is now loaded, press ENTER to save. Otherwise Ctrl+C to exit.")
+        else:
+            print("✅ Teams appears ready.")
 
         context.storage_state(path=str(STATE_PATH))
         print(f"\n✅ Session saved to {STATE_PATH}")
@@ -203,15 +264,27 @@ def run_scraper(config, users: list[str]):
         )
         page = context.new_page()
 
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        context = browser.new_context(
+            storage_state=str(STATE_PATH),
+            viewport={"width": 1920, "height": 1080},
+            user_agent=user_agent,
+        )
+        page = context.new_page()
+        apply_stealth(page)
+
         print("Loading Teams...")
         page.goto(config["teams_url"], wait_until="networkidle")
 
-        # Wait for Teams to be ready (look for something that indicates loaded state)
-        try:
-            page.wait_for_load_state("networkidle")
-            time.sleep(5)  # Give React time to render
-        except PlaywrightTimeout:
-            pass
+        print("Waiting for Teams to be ready...")
+        if not wait_for_teams_ready(page, timeout_ms=120000):
+            print("⚠️  Teams not ready after 2 minutes. Taking screenshot...")
+            save_screenshot(page, "run_stuck")
+            print("Trying to continue anyway...")
+        time.sleep(3)
 
         print("Teams loaded. Starting poll loop.\n")
 
@@ -274,13 +347,21 @@ def inspect_page(config):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, args=config.get("browser_args", []))
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
         context = browser.new_context(
             storage_state=str(STATE_PATH) if STATE_PATH.exists() else None,
-            viewport=config.get("viewport", {"width": 1280, "height": 720})
+            viewport={"width": 1920, "height": 1080},
+            user_agent=user_agent,
         )
         page = context.new_page()
+        apply_stealth(page)
         page.goto(config["teams_url"], wait_until="networkidle")
-        time.sleep(10)
+        if not wait_for_teams_ready(page, timeout_ms=120000):
+            save_screenshot(page, "inspect_stuck")
+        time.sleep(5)
 
         html = page.content()
         debug_path = STATE_DIR / "page_debug.html"
