@@ -4,3 +4,4 @@
 *.db-journal
 /token_cache.json
 /.env
+scraper/state/
