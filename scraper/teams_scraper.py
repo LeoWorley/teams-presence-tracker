@@ -123,57 +123,57 @@ def try_scrape_self(page, strategies: list) -> str | None:
 
 
 def scrape_users_via_js(page, users: list[str]) -> list:
-    """Use JavaScript DOM walking to find users and their presence dots."""
+    """Find users by visible text, then use JS to detect colored presence dot."""
     results = []
     for user in users:
         try:
+            locator = page.locator(f"text={user}")
+            if locator.count() == 0:
+                continue
+            el = locator.first
+
             data = page.evaluate("""
-                (userName) => {
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                    let node;
-                    while (node = walker.nextNode()) {
-                        if (node.textContent.trim().toLowerCase() === userName.toLowerCase()) {
-                            const el = node.parentElement;
-                            let container = el.closest('[role="listitem"]') || el.closest('li') || el.closest('div') || el.parentElement;
-                            if (!container) continue;
-                            
-                            // Look for small colored circles (presence dots)
-                            const candidates = container.querySelectorAll('div, span, svg, i');
-                            for (const cand of candidates) {
-                                const rect = cand.getBoundingClientRect();
-                                if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
-                                    const style = window.getComputedStyle(cand);
-                                    const bg = style.backgroundColor || style.color || cand.getAttribute('fill');
-                                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
-                                        const aria = cand.getAttribute('aria-label') || '';
-                                        return {found: true, color: bg, ariaLabel: aria, containerText: container.textContent.trim().substring(0, 100)};
-                                    }
+                (el) => {
+                    let container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
+                    if (!container) return null;
+                    for (let depth = 0; depth < 4 && container; depth++) {
+                        const dots = container.querySelectorAll('div, span, svg, i');
+                        for (const cand of dots) {
+                            const rect = cand.getBoundingClientRect();
+                            if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
+                                const style = window.getComputedStyle(cand);
+                                const bg = style.backgroundColor || style.color || cand.getAttribute('fill');
+                                if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
+                                    return {
+                                        color: bg,
+                                        ariaLabel: cand.getAttribute('aria-label') || '',
+                                        containerText: container.textContent.trim().substring(0, 80)
+                                    };
                                 }
                             }
-                            // Fallback: return container text to help debugging
-                            return {found: true, color: '', ariaLabel: '', containerText: container.textContent.trim().substring(0, 100)};
                         }
+                        container = container.parentElement;
                     }
-                    return {found: false};
+                    return null;
                 }
-            """, user)
-            
-            if data and data.get("found"):
+            """, el)
+
+            if data:
                 color = data.get("color", "")
                 aria = data.get("ariaLabel", "")
-                # Map common Teams presence colors
                 raw_status = aria or color
-                if "rgb(16," in color or "rgb(107," in color or "#0f7" in color or "green" in color.lower():
+                color_lower = color.lower()
+                if any(g in color_lower for g in ["rgb(16,", "rgb(107,", "green", "#0f7", "#107", "rgb(15,"]):
                     raw_status = "Available"
-                elif "rgb(196," in color or "rgb(234," in color or "red" in color.lower():
+                elif any(r in color_lower for r in ["rgb(196,", "rgb(234,", "red", "#c43", "rgb(192,"]):
                     raw_status = "Busy"
-                elif "rgb(255," in color or "yellow" in color.lower() or "orange" in color.lower():
+                elif any(y in color_lower for y in ["rgb(255,", "yellow", "orange", "#ffc", "rgb(234, 185"]):
                     raw_status = "Away"
-                elif "rgb(128," in color or "gray" in color.lower() or "grey" in color.lower():
+                elif any(gry in color_lower for gry in ["rgb(128,", "gray", "grey", "#808"]):
                     raw_status = "Offline"
                 results.append({"name": user, "raw": raw_status, "debug": data})
         except Exception as e:
-            print(f"[WARN] JS scrape failed for {user}: {e}")
+            print(f"[WARN] Scrape failed for {user}: {e}")
     return results
 
 
@@ -413,7 +413,7 @@ def inspect_page(config):
                 print(f"  [{i}] FAILED: {e}")
 
         # JS contact scraper demo
-        print("\nJS contact scraper demo (searching for any visible names)...")
+        print("\nJS contact scraper demo (searching sidebar for contacts with colored dots)...")
         demo = page.evaluate("""
             () => {
                 const names = [];
@@ -421,11 +421,12 @@ def inspect_page(config):
                 let node;
                 while (node = walker.nextNode()) {
                     const text = node.textContent.trim();
-                    if (text.length > 3 && text.length < 40 && text.includes(' ')) {
+                    // Heuristic: looks like a person name (2+ words, no digits, reasonable length)
+                    if (text.length > 5 && text.length < 35 && text.includes(' ') && !/\\d/.test(text) && !text.includes('notification') && !text.includes('menu')) {
                         const el = node.parentElement;
-                        const container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
+                        let container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
                         if (container) {
-                            const dots = container.querySelectorAll('div, span, svg');
+                            const dots = container.querySelectorAll('div, span, svg, i');
                             for (const dot of dots) {
                                 const rect = dot.getBoundingClientRect();
                                 if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
@@ -440,7 +441,7 @@ def inspect_page(config):
                         }
                     }
                 }
-                return names.slice(0, 10);
+                return names.slice(0, 15);
             }
         """)
         if demo:
