@@ -26,8 +26,19 @@ DEFAULT_CONFIG = {
     "teams_url": "https://teams.microsoft.com",
     "poll_interval_seconds": 30,
     "headless": True,
-    "browser_args": ["--disable-blink-features=AutomationControlled"],
-    "viewport": {"width": 1280, "height": 720},
+    "browser_args": [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--disable-setuid-sandbox",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-infobars",
+        "--window-size=1920,1080",
+        "--start-maximized",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-site-isolation-trials"
+    ],
+    "viewport": {"width": 1920, "height": 1080},
     "selectors": {
         "self_presence": {
             "strategies": [
@@ -35,11 +46,6 @@ DEFAULT_CONFIG = {
                 {"type": "css", "value": "[data-tid='self-presence']", "extract": "aria-label"},
                 {"type": "css", "value": "button[aria-label*='status']", "extract": "aria-label"},
             ]
-        },
-        "contact_list": {
-            "container": ".chat-list-item",
-            "name": ".chat-title",
-            "presence": ".presence"
         }
     },
     "status_mapping": {
@@ -105,7 +111,6 @@ def try_scrape_self(page, strategies: list) -> str | None:
                 if text:
                     return text
             elif strat["type"] == "aria-label":
-                # Find any element whose aria-label contains the pattern
                 els = page.locator(f"[aria-label*='{strat['pattern']}']")
                 count = els.count()
                 for i in range(min(count, 5)):
@@ -117,35 +122,58 @@ def try_scrape_self(page, strategies: list) -> str | None:
     return None
 
 
-def scrape_contact_list(page, config) -> list:
-    """Scrape presence from the chat/contact sidebar."""
+def scrape_users_via_js(page, users: list[str]) -> list:
+    """Use JavaScript DOM walking to find users and their presence dots."""
     results = []
-    selectors = config.get("selectors", {}).get("contact_list", {})
-    container_sel = selectors.get("container", ".chat-list-item")
-    name_sel = selectors.get("name", ".chat-title")
-    presence_sel = selectors.get("presence", ".presence")
-
-    try:
-        containers = page.locator(container_sel)
-        count = containers.count()
-        for i in range(min(count, 20)):
-            try:
-                container = containers.nth(i)
-                name_els = container.locator(name_sel)
-                if name_els.count() == 0:
-                    continue
-                name = name_els.first.text_content(timeout=0) or "Unknown"
-                presence_els = container.locator(presence_sel)
-                presence_text = ""
-                if presence_els.count() > 0:
-                    pel = presence_els.first
-                    presence_text = pel.get_attribute("aria-label", timeout=0) or pel.text_content(timeout=0) or ""
-                if name.strip():
-                    results.append({"name": name.strip(), "raw": presence_text})
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"[WARN] Contact list scrape failed: {e}")
+    for user in users:
+        try:
+            data = page.evaluate("""
+                (userName) => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                    let node;
+                    while (node = walker.nextNode()) {
+                        if (node.textContent.trim().toLowerCase() === userName.toLowerCase()) {
+                            const el = node.parentElement;
+                            let container = el.closest('[role="listitem"]') || el.closest('li') || el.closest('div') || el.parentElement;
+                            if (!container) continue;
+                            
+                            // Look for small colored circles (presence dots)
+                            const candidates = container.querySelectorAll('div, span, svg, i');
+                            for (const cand of candidates) {
+                                const rect = cand.getBoundingClientRect();
+                                if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
+                                    const style = window.getComputedStyle(cand);
+                                    const bg = style.backgroundColor || style.color || cand.getAttribute('fill');
+                                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
+                                        const aria = cand.getAttribute('aria-label') || '';
+                                        return {found: true, color: bg, ariaLabel: aria, containerText: container.textContent.trim().substring(0, 100)};
+                                    }
+                                }
+                            }
+                            // Fallback: return container text to help debugging
+                            return {found: true, color: '', ariaLabel: '', containerText: container.textContent.trim().substring(0, 100)};
+                        }
+                    }
+                    return {found: false};
+                }
+            """, user)
+            
+            if data and data.get("found"):
+                color = data.get("color", "")
+                aria = data.get("ariaLabel", "")
+                # Map common Teams presence colors
+                raw_status = aria or color
+                if "rgb(16," in color or "rgb(107," in color or "#0f7" in color or "green" in color.lower():
+                    raw_status = "Available"
+                elif "rgb(196," in color or "rgb(234," in color or "red" in color.lower():
+                    raw_status = "Busy"
+                elif "rgb(255," in color or "yellow" in color.lower() or "orange" in color.lower():
+                    raw_status = "Away"
+                elif "rgb(128," in color or "gray" in color.lower() or "grey" in color.lower():
+                    raw_status = "Offline"
+                results.append({"name": user, "raw": raw_status, "debug": data})
+        except Exception as e:
+            print(f"[WARN] JS scrape failed for {user}: {e}")
     return results
 
 
@@ -164,13 +192,10 @@ def wait_for_teams_ready(page, timeout_ms: int = 30000):
     start = time.time()
     while (time.time() - start) * 1000 < timeout_ms:
         try:
-            # If page has a visible search bar or chat list, it's ready
             if page.locator("input[placeholder*='search' i], input[placeholder*='buscar' i]").first.is_visible(timeout=2000):
                 return True
-            # If left sidebar with contacts is visible
             if page.locator("text=Chat, div:has-text('Chat'), div:has-text('Chats')").first.is_visible(timeout=1000):
                 return True
-            # If any contact name is visible in sidebar
             if page.locator("[role='listitem']").first.is_visible(timeout=1000):
                 return True
         except Exception:
@@ -259,12 +284,6 @@ def run_scraper(config, users: list[str]):
             headless=config.get("headless", True),
             args=config.get("browser_args", [])
         )
-        context = browser.new_context(
-            storage_state=str(STATE_PATH),
-            viewport=config.get("viewport", {"width": 1280, "height": 720})
-        )
-        page = context.new_page()
-
         user_agent = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -282,7 +301,7 @@ def run_scraper(config, users: list[str]):
 
         print("Waiting for Teams to be ready...")
         if not wait_for_teams_ready(page, timeout_ms=30000):
-            print("⚠️  Teams not ready after 2 minutes. Taking screenshot...")
+            print("⚠️  Teams not ready after 30 seconds. Taking screenshot...")
             save_screenshot(page, "run_stuck")
             print("Trying to continue anyway...")
         time.sleep(3)
@@ -291,7 +310,7 @@ def run_scraper(config, users: list[str]):
 
         while True:
             try:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 # --- Scrape self presence ---
                 strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
@@ -303,33 +322,32 @@ def run_scraper(config, users: list[str]):
                     prev = last_status.get(key, "")
                     if f"{avail}/{activity}" != prev:
                         if prev:
-                            print(f"[{now}] Self changed: {prev} -> {avail}/{activity}")
+                            print(f"[{now_str}] Self changed: {prev} -> {avail}/{activity}")
                         else:
-                            print(f"[{now}] Self status: {avail}/{activity}")
+                            print(f"[{now_str}] Self status: {avail}/{activity}")
                         append_record("me", avail, activity, raw)
                         last_status[key] = f"{avail}/{activity}"
                 else:
-                    print(f"[{now}] Could not find self presence. Run --inspect to debug selectors.")
+                    print(f"[{now_str}] Could not find self presence.")
 
-                # --- Scrape contact list (if users specified) ---
+                # --- Scrape other users via JS DOM walking ---
                 if users:
-                    contacts = scrape_contact_list(page, config)
+                    contacts = scrape_users_via_js(page, users)
                     for contact in contacts:
                         name = contact["name"]
-                        if name.lower() in [u.lower() for u in users]:
-                            raw = contact["raw"]
-                            avail, activity = parse_status(raw, config.get("status_mapping", {}))
-                            key = name
-                            prev = last_status.get(key, "")
-                            if f"{avail}/{activity}" != prev:
-                                if prev:
-                                    print(f"[{now}] {name} changed: {prev} -> {avail}/{activity}")
-                                else:
-                                    print(f"[{now}] {name} status: {avail}/{activity}")
-                                append_record(name, avail, activity, raw)
-                                last_status[key] = f"{avail}/{activity}"
+                        raw = contact["raw"]
+                        avail, activity = parse_status(raw, config.get("status_mapping", {}))
+                        key = name
+                        prev = last_status.get(key, "")
+                        if f"{avail}/{activity}" != prev:
+                            if prev:
+                                print(f"[{now_str}] {name} changed: {prev} -> {avail}/{activity}")
+                            else:
+                                print(f"[{now_str}] {name} status: {avail}/{activity}")
+                            append_record(name, avail, activity, raw)
+                            last_status[key] = f"{avail}/{activity}"
 
-                # Keep page alive (scroll a tiny bit)
+                # Keep page alive
                 try:
                     page.evaluate("window.scrollBy(0, 1)")
                 except Exception:
@@ -342,7 +360,7 @@ def run_scraper(config, users: list[str]):
 
 
 def inspect_page(config):
-    """Save page HTML and selector matches for debugging."""
+    """Save rendered DOM and test selectors for debugging."""
     print("INSPECT MODE: loading Teams and saving debug info...")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -360,17 +378,18 @@ def inspect_page(config):
         page = context.new_page()
         apply_stealth(page)
         page.goto(config["teams_url"], wait_until="networkidle")
-        if not wait_for_teams_ready(page, timeout_ms=120000):
+        if not wait_for_teams_ready(page, timeout_ms=30000):
             save_screenshot(page, "inspect_stuck")
         time.sleep(5)
 
-        html = page.content()
+        # Save rendered DOM (not just static HTML)
+        rendered = page.evaluate("() => document.documentElement.outerHTML")
         debug_path = STATE_DIR / "page_debug.html"
         with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"Saved page HTML to: {debug_path}")
+            f.write(rendered)
+        print(f"Saved rendered DOM to: {debug_path}")
 
-        # Try self-presence strategies
+        # Self-presence results
         strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
         print("\nSelf-presence strategy results:")
         for i, strat in enumerate(strategies):
@@ -380,18 +399,55 @@ def inspect_page(config):
                     print(f"  [{i}] CSS '{strat['value']}': found {count} elements")
                     if count > 0:
                         el = page.locator(strat["value"]).first
-                        text = el.text_content() or ""
-                        aria = el.get_attribute("aria-label") or ""
+                        text = el.text_content(timeout=0) or ""
+                        aria = el.get_attribute("aria-label", timeout=0) or ""
                         print(f"      text='{text[:60]}' aria-label='{aria[:60]}'")
                 elif strat["type"] == "aria-label":
                     els = page.locator(f"[aria-label*='{strat['pattern']}']")
                     count = els.count()
                     print(f"  [{i}] aria-label*='{strat['pattern']}': found {count} elements")
                     for j in range(min(count, 3)):
-                        val = els.nth(j).get_attribute("aria-label") or ""
+                        val = els.nth(j).get_attribute("aria-label", timeout=0) or ""
                         print(f"      [{j}] aria-label='{val[:80]}'")
             except Exception as e:
                 print(f"  [{i}] FAILED: {e}")
+
+        # JS contact scraper demo
+        print("\nJS contact scraper demo (searching for any visible names)...")
+        demo = page.evaluate("""
+            () => {
+                const names = [];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+                while (node = walker.nextNode()) {
+                    const text = node.textContent.trim();
+                    if (text.length > 3 && text.length < 40 && text.includes(' ')) {
+                        const el = node.parentElement;
+                        const container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
+                        if (container) {
+                            const dots = container.querySelectorAll('div, span, svg');
+                            for (const dot of dots) {
+                                const rect = dot.getBoundingClientRect();
+                                if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
+                                    const style = window.getComputedStyle(dot);
+                                    const bg = style.backgroundColor || style.color;
+                                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
+                                        names.push({name: text, color: bg});
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return names.slice(0, 10);
+            }
+        """)
+        if demo:
+            for item in demo:
+                print(f"  Found: '{item.get('name')}' with color {item.get('color')}")
+        else:
+            print("  No contacts with colored dots found.")
 
         input("\nPress ENTER to close browser...")
         browser.close()
@@ -400,8 +456,8 @@ def inspect_page(config):
 def main():
     parser = argparse.ArgumentParser(description="Teams Presence Scraper via Playwright")
     parser.add_argument("--setup", action="store_true", help="Interactive login and session save")
-    parser.add_argument("--inspect", action="store_true", help="Debug mode: save HTML and test selectors")
-    parser.add_argument("--users", nargs="+", help="Users to track (names as shown in Teams chat list)")
+    parser.add_argument("--inspect", action="store_true", help="Debug mode: save DOM and test selectors")
+    parser.add_argument("--users", nargs="+", help="Users to track (exact names as shown in Teams sidebar)")
     args = parser.parse_args()
 
     config = load_config()
