@@ -75,7 +75,7 @@ def append_record(user_id: str, availability: str, activity: str, status_message
     ensure_csv()
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        now = datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         writer.writerow(["", user_id, user_id, availability, activity, status_message, now])
 
 
