@@ -94,13 +94,14 @@ def try_scrape_self(page, strategies: list) -> str | None:
     for strat in strategies:
         try:
             if strat["type"] == "css":
-                el = page.locator(strat["value"]).first
-                if el.count() == 0:
+                els = page.locator(strat["value"])
+                if els.count() == 0:
                     continue
+                el = els.first
                 if strat.get("extract") == "aria-label":
-                    text = el.get_attribute("aria-label") or ""
+                    text = el.get_attribute("aria-label", timeout=0) or ""
                 else:
-                    text = el.text_content() or ""
+                    text = el.text_content(timeout=0) or ""
                 if text:
                     return text
             elif strat["type"] == "aria-label":
@@ -108,7 +109,7 @@ def try_scrape_self(page, strategies: list) -> str | None:
                 els = page.locator(f"[aria-label*='{strat['pattern']}']")
                 count = els.count()
                 for i in range(min(count, 5)):
-                    text = els.nth(i).get_attribute("aria-label") or ""
+                    text = els.nth(i).get_attribute("aria-label", timeout=0) or ""
                     if text:
                         return text
         except Exception:
@@ -130,11 +131,15 @@ def scrape_contact_list(page, config) -> list:
         for i in range(min(count, 20)):
             try:
                 container = containers.nth(i)
-                name = container.locator(name_sel).first.text_content() or "Unknown"
-                presence_el = container.locator(presence_sel).first
+                name_els = container.locator(name_sel)
+                if name_els.count() == 0:
+                    continue
+                name = name_els.first.text_content(timeout=0) or "Unknown"
+                presence_els = container.locator(presence_sel)
                 presence_text = ""
-                if presence_el.count() > 0:
-                    presence_text = presence_el.get_attribute("aria-label") or presence_el.text_content() or ""
+                if presence_els.count() > 0:
+                    pel = presence_els.first
+                    presence_text = pel.get_attribute("aria-label", timeout=0) or pel.text_content(timeout=0) or ""
                 if name.strip():
                     results.append({"name": name.strip(), "raw": presence_text})
             except Exception:
