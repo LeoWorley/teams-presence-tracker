@@ -11,7 +11,7 @@ import csv
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -75,7 +75,7 @@ def append_record(user_id: str, availability: str, activity: str, status_message
     ensure_csv()
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         writer.writerow(["", user_id, user_id, availability, activity, status_message, now])
 
 
@@ -154,26 +154,22 @@ def apply_stealth(page):
     """)
 
 
-def wait_for_teams_ready(page, timeout_ms: int = 120000):
+def wait_for_teams_ready(page, timeout_ms: int = 30000):
     """Wait until Teams appears to be fully loaded."""
-    indicators = [
-        "[data-tid='app-layout-area']",
-        "[data-tid='search-button']",
-        "button[aria-label*='New chat']",
-        "button[aria-label*='new chat']",
-        ".ts-left-rail",
-        "[data-tid='left-rail']",
-        "[data-tid='chat-list-item']",
-        ".chat-list-item",
-    ]
     start = time.time()
     while (time.time() - start) * 1000 < timeout_ms:
-        for sel in indicators:
-            try:
-                if page.locator(sel).first.is_visible(timeout=2000):
-                    return True
-            except Exception:
-                continue
+        try:
+            # If page has a visible search bar or chat list, it's ready
+            if page.locator("input[placeholder*='search' i], input[placeholder*='buscar' i]").first.is_visible(timeout=2000):
+                return True
+            # If left sidebar with contacts is visible
+            if page.locator("text=Chat, div:has-text('Chat'), div:has-text('Chats')").first.is_visible(timeout=1000):
+                return True
+            # If any contact name is visible in sidebar
+            if page.locator("[role='listitem']").first.is_visible(timeout=1000):
+                return True
+        except Exception:
+            pass
         time.sleep(2)
     return False
 
@@ -220,8 +216,8 @@ def login_and_save_state(config):
         print("\nLoading Teams...")
         page.goto(config["teams_url"], wait_until="networkidle")
 
-        print("Waiting for Teams to finish loading (up to 2 minutes)...")
-        if not wait_for_teams_ready(page, timeout_ms=120000):
+        print("Waiting for Teams to finish loading (up to 30 seconds)...")
+        if not wait_for_teams_ready(page, timeout_ms=30000):
             print("\n⚠️  Teams seems stuck on the loading screen.")
             save_screenshot(page, "setup_stuck")
             print("Common fixes:")
@@ -280,7 +276,7 @@ def run_scraper(config, users: list[str]):
         page.goto(config["teams_url"], wait_until="networkidle")
 
         print("Waiting for Teams to be ready...")
-        if not wait_for_teams_ready(page, timeout_ms=120000):
+        if not wait_for_teams_ready(page, timeout_ms=30000):
             print("⚠️  Teams not ready after 2 minutes. Taking screenshot...")
             save_screenshot(page, "run_stuck")
             print("Trying to continue anyway...")
