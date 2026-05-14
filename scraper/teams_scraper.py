@@ -302,9 +302,10 @@ def run_scraper(config, users: list[str]):
         print("Waiting for Teams to be ready...")
         if not wait_for_teams_ready(page, timeout_ms=30000):
             print("⚠️  Teams not ready after 30 seconds. Taking screenshot...")
-            save_screenshot(page, "run_stuck")
+            save_screenshot(page, "run_not_ready")
             print("Trying to continue anyway...")
-        time.sleep(3)
+        print("Teams layout ready. Waiting for contacts to load...")
+        time.sleep(15)  # Give async chat list time to populate
 
         print("Teams loaded. Starting poll loop.\n")
 
@@ -379,8 +380,9 @@ def inspect_page(config):
         apply_stealth(page)
         page.goto(config["teams_url"], wait_until="networkidle")
         if not wait_for_teams_ready(page, timeout_ms=30000):
-            save_screenshot(page, "inspect_stuck")
-        time.sleep(5)
+            save_screenshot(page, "inspect_not_ready")
+        print("Waiting for contacts to load...")
+        time.sleep(20)  # Give async chat list time to populate
 
         # Save rendered DOM (not just static HTML)
         rendered = page.evaluate("() => document.documentElement.outerHTML")
