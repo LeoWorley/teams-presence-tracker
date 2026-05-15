@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
         "away": ["away", "be right back", "idle"],
         "offline": ["offline", "unknown", "presence unknown"]
     },
+    "users": [],
     "ntfy_topic": None
 }
 
@@ -348,7 +349,7 @@ def login_and_save_state(config):
         browser.close()
 
 
-def run_scraper(config, users: list[str]):
+def run_scraper(config, users: list[str], use_config_users: bool = False):
     """Main polling loop."""
     ensure_csv()
 
@@ -360,7 +361,10 @@ def run_scraper(config, users: list[str]):
     print(f"CSV: {CSV_PATH}")
     print(f"Poll interval: {config['poll_interval_seconds']}s")
     print(f"Users: {users if users else 'self only'}")
-    print("Press Ctrl+C to stop\n")
+    if use_config_users:
+        print("(Users loaded from config.json — edits will be picked up automatically)\n")
+    else:
+        print("Press Ctrl+C to stop\n")
 
     last_status: dict[str, str] = {}
 
@@ -399,6 +403,13 @@ def run_scraper(config, users: list[str]):
             try:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 poll_count += 1
+
+                # Hot-reload config users if not overridden by CLI
+                if use_config_users:
+                    fresh_config = load_config()
+                    users = fresh_config.get("users", [])
+                    # Allow poll interval changes too
+                    config["poll_interval_seconds"] = fresh_config.get("poll_interval_seconds", config["poll_interval_seconds"])
 
                 # --- Periodic refresh: re-navigate to chat list every 20 polls (~10 min at 30s interval) ---
                 if poll_count % 20 == 0:
@@ -607,7 +618,14 @@ def main():
         inspect_page(config)
         return
 
-    run_scraper(config, args.users or [])
+    # If CLI --users is provided, use it exclusively (no hot-reload).
+    # Otherwise fall back to config.json users and allow hot-reloading.
+    cli_users = args.users or []
+    if cli_users:
+        run_scraper(config, cli_users, use_config_users=False)
+    else:
+        config_users = config.get("users", [])
+        run_scraper(config, config_users, use_config_users=True)
 
 
 if __name__ == "__main__":

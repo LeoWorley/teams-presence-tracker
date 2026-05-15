@@ -15,5 +15,21 @@
     "--disable-features=IsolateOrigins,site-per-process",
     "--disable-site-isolation-trials"
   ],
-  "viewport": {"width": 1920, "height": 1080}
+  "viewport": {"width": 1920, "height": 1080},
+  "users": [],
+  "selectors": {
+    "self_presence": {
+      "strategies": [
+        {"type": "aria-label", "pattern": "status", "extract": "text"},
+        {"type": "css", "value": "[data-tid='self-presence']", "extract": "aria-label"},
+        {"type": "css", "value": "button[aria-label*='status']", "extract": "aria-label"}
+      ]
+    }
+  },
+  "status_mapping": {
+    "available": ["available", "free"],
+    "busy": ["busy", "in a call", "in a meeting", "do not disturb", "presenting"],
+    "away": ["away", "be right back", "idle"],
+    "offline": ["offline", "unknown", "presence unknown"]
+  }
 }
