@@ -1,0 +1,19 @@
+{
+  "teams_url": "https://teams.microsoft.com",
+  "poll_interval_seconds": 30,
+  "headless": true,
+  "ntfy_topic": null,
+  "browser_args": [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--disable-setuid-sandbox",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-infobars",
+    "--window-size=1920,1080",
+    "--start-maximized",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--disable-site-isolation-trials"
+  ],
+  "viewport": {"width": 1920, "height": 1080}
+}
