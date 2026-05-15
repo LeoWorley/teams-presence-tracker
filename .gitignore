@@ -5,3 +5,7 @@
 /token_cache.json
 /.env
 scraper/state/
+
+# Python
+__pycache__/
+*.pyc

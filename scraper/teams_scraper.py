@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -53,7 +54,8 @@ DEFAULT_CONFIG = {
         "busy": ["busy", "in a call", "in a meeting", "do not disturb", "presenting"],
         "away": ["away", "be right back", "idle"],
         "offline": ["offline", "unknown", "presence unknown"]
-    }
+    },
+    "ntfy_topic": None
 }
 
 
@@ -95,6 +97,21 @@ def parse_status(text: str, mapping: dict) -> tuple:
     return "unknown", text.strip()
 
 
+def send_ntfy_notification(topic: str | None, title: str, message: str):
+    """Send a push notification via ntfy.sh."""
+    if not topic:
+        return
+    try:
+        requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode("utf-8"),
+            headers={"Title": title, "Priority": "default"},
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"[WARN] ntfy notification failed: {e}")
+
+
 def try_scrape_self(page, strategies: list) -> str | None:
     """Try multiple strategies to find self presence text."""
     for strat in strategies:
@@ -122,59 +139,86 @@ def try_scrape_self(page, strategies: list) -> str | None:
     return None
 
 
-def scrape_users_via_js(page, users: list[str]) -> list:
-    """Find users by visible text, then use JS to detect colored presence dot."""
+def scrape_users_via_js(page, users: list[str]) -> tuple[list, list[str]]:
+    """Find users by visible text, then use JS to detect colored presence dot.
+    Returns (results, list of users_not_found).
+    """
     results = []
+    not_found = []
     for user in users:
         try:
             locator = page.locator(f"text={user}")
             if locator.count() == 0:
+                not_found.append(user)
                 continue
             el = locator.first
 
-            data = page.evaluate("""
+            data = el.evaluate("""
                 (el) => {
+                    const COLOR_MAP = {
+                        'rgb(19, 161, 14)': 'Available',
+                        'rgb(209, 52, 56)': 'Busy',
+                        'rgb(234, 163, 0)': 'Away',
+                        'rgb(194, 57, 179)': 'Do not disturb',
+                        'rgb(128, 128, 128)': 'Offline',
+                        'rgb(176, 176, 176)': 'Offline'
+                    };
+
                     let container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
-                    if (!container) return null;
-                    for (let depth = 0; depth < 4 && container; depth++) {
-                        const dots = container.querySelectorAll('div, span, svg, i');
-                        for (const cand of dots) {
-                            const rect = cand.getBoundingClientRect();
-                            if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
-                                const style = window.getComputedStyle(cand);
-                                const bg = style.backgroundColor || style.color || cand.getAttribute('fill');
-                                if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
-                                    return {
-                                        color: bg,
-                                        ariaLabel: cand.getAttribute('aria-label') || '',
-                                        containerText: container.textContent.trim().substring(0, 80)
-                                    };
+                    if (!container) container = el.parentElement;
+
+                    for (let depth = 0; depth < 6 && container; depth++) {
+                        const badges = container.querySelectorAll('.fui-PresenceBadge, [data-tid=\"presence-badge\"], .presence-badge');
+                        for (const badge of badges) {
+                            const svg = badge.querySelector('svg');
+                            if (svg) {
+                                const style = window.getComputedStyle(svg);
+                                const fill = style.fill;
+                                if (COLOR_MAP[fill]) {
+                                    return { color: fill, status: COLOR_MAP[fill], source: 'svg-fill' };
+                                }
+                            }
+                            const path = badge.querySelector('svg path');
+                            if (path) {
+                                const style = window.getComputedStyle(path);
+                                const fill = style.fill;
+                                if (COLOR_MAP[fill]) {
+                                    return { color: fill, status: COLOR_MAP[fill], source: 'path-fill' };
                                 }
                             }
                         }
+
+                        const all = container.querySelectorAll('*');
+                        for (const cand of all) {
+                            const rect = cand.getBoundingClientRect();
+                            if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
+                                const style = window.getComputedStyle(cand);
+                                const fill = style.fill;
+                                const bg = style.backgroundColor;
+                                if (COLOR_MAP[fill]) {
+                                    return { color: fill, status: COLOR_MAP[fill], source: 'fill' };
+                                }
+                                if (COLOR_MAP[bg]) {
+                                    return { color: bg, status: COLOR_MAP[bg], source: 'bg' };
+                                }
+                            }
+                        }
+
                         container = container.parentElement;
                     }
                     return null;
                 }
-            """, el)
+            """)
 
             if data:
-                color = data.get("color", "")
-                aria = data.get("ariaLabel", "")
-                raw_status = aria or color
-                color_lower = color.lower()
-                if any(g in color_lower for g in ["rgb(16,", "rgb(107,", "green", "#0f7", "#107", "rgb(15,"]):
-                    raw_status = "Available"
-                elif any(r in color_lower for r in ["rgb(196,", "rgb(234,", "red", "#c43", "rgb(192,"]):
-                    raw_status = "Busy"
-                elif any(y in color_lower for y in ["rgb(255,", "yellow", "orange", "#ffc", "rgb(234, 185"]):
-                    raw_status = "Away"
-                elif any(gry in color_lower for gry in ["rgb(128,", "gray", "grey", "#808"]):
-                    raw_status = "Offline"
+                raw_status = data.get("status", "unknown")
                 results.append({"name": user, "raw": raw_status, "debug": data})
+            else:
+                not_found.append(user)
         except Exception as e:
             print(f"[WARN] Scrape failed for {user}: {e}")
-    return results
+            not_found.append(user)
+    return results, not_found
 
 
 def apply_stealth(page):
@@ -201,6 +245,47 @@ def wait_for_teams_ready(page, timeout_ms: int = 30000):
         except Exception:
             pass
         time.sleep(2)
+    return False
+
+
+def navigate_to_chat_list(page):
+    """Click the Chat button to ensure we are on the chat list view."""
+    try:
+        # Try aria-label first
+        chat_btn = page.locator('[aria-label="Chat (Ctrl+Shift+2)"]').first
+        if chat_btn.count() > 0:
+            chat_btn.click()
+            print("  Clicked Chat button to show chat list.")
+            time.sleep(10)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def scroll_chat_list_to_top(page):
+    """Scroll the chat list to the top so pinned/favorite contacts are visible."""
+    try:
+        # Find the chat list container and scroll to top
+        # Common selectors for the chat list scrollable area
+        list = page.locator('[role="list"]').first
+        if list.count() > 0:
+            list.evaluate("el => el.scrollTop = 0")
+            return True
+        # Fallback: find any scrollable container in the left sidebar
+        scrollables = page.locator('div').all()
+        for div in scrollables:
+            try:
+                is_scrollable = div.evaluate("""
+                    el => el.scrollHeight > el.clientHeight && el.clientHeight > 100
+                """)
+                if is_scrollable:
+                    div.evaluate("el => el.scrollTop = 0")
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
     return False
 
 
@@ -304,14 +389,23 @@ def run_scraper(config, users: list[str]):
             print("⚠️  Teams not ready after 30 seconds. Taking screenshot...")
             save_screenshot(page, "run_not_ready")
             print("Trying to continue anyway...")
-        print("Teams layout ready. Waiting for contacts to load...")
-        time.sleep(15)  # Give async chat list time to populate
-
+        print("Teams layout ready. Navigating to chat list...")
+        navigate_to_chat_list(page)
         print("Teams loaded. Starting poll loop.\n")
 
+        poll_count = 0
+        missing_streak: dict[str, int] = {}
         while True:
             try:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                poll_count += 1
+
+                # --- Periodic refresh: re-navigate to chat list every 20 polls (~10 min at 30s interval) ---
+                if poll_count % 20 == 0:
+                    try:
+                        navigate_to_chat_list(page)
+                    except Exception:
+                        pass
 
                 # --- Scrape self presence ---
                 strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
@@ -324,8 +418,10 @@ def run_scraper(config, users: list[str]):
                     if f"{avail}/{activity}" != prev:
                         if prev:
                             print(f"[{now_str}] Self changed: {prev} -> {avail}/{activity}")
+                            send_ntfy_notification(config.get("ntfy_topic"), "Teams Status - Self", f"You are now {avail}")
                         else:
                             print(f"[{now_str}] Self status: {avail}/{activity}")
+                            send_ntfy_notification(config.get("ntfy_topic"), "Teams Status - Self", f"You are now {avail}")
                         append_record("me", avail, activity, raw)
                         last_status[key] = f"{avail}/{activity}"
                 else:
@@ -333,7 +429,26 @@ def run_scraper(config, users: list[str]):
 
                 # --- Scrape other users via JS DOM walking ---
                 if users:
-                    contacts = scrape_users_via_js(page, users)
+                    # Scroll chat list to top so favorites/pinned contacts are visible
+                    scroll_chat_list_to_top(page)
+                    time.sleep(1)
+
+                    contacts, not_found = scrape_users_via_js(page, users)
+
+                    # Log warnings for missing users
+                    for user in not_found:
+                        missing_streak[user] = missing_streak.get(user, 0) + 1
+                        if missing_streak[user] == 1:
+                            print(f"[{now_str}] ⚠️  {user} not found in chat list (may have scrolled out of view)")
+                        elif missing_streak[user] % 10 == 0:
+                            print(f"[{now_str}] ⚠️  {user} still missing after {missing_streak[user]} polls")
+                    # Reset streak for found users
+                    for contact in contacts:
+                        user = contact["name"]
+                        if user in missing_streak and missing_streak[user] > 0:
+                            print(f"[{now_str}] ✓  {user} found again")
+                        missing_streak[user] = 0
+
                     for contact in contacts:
                         name = contact["name"]
                         raw = contact["raw"]
@@ -343,8 +458,10 @@ def run_scraper(config, users: list[str]):
                         if f"{avail}/{activity}" != prev:
                             if prev:
                                 print(f"[{now_str}] {name} changed: {prev} -> {avail}/{activity}")
+                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {name}", f"{name} is now {avail}")
                             else:
                                 print(f"[{now_str}] {name} status: {avail}/{activity}")
+                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {name}", f"{name} is now {avail}")
                             append_record(name, avail, activity, raw)
                             last_status[key] = f"{avail}/{activity}"
 
@@ -381,8 +498,8 @@ def inspect_page(config):
         page.goto(config["teams_url"], wait_until="networkidle")
         if not wait_for_teams_ready(page, timeout_ms=30000):
             save_screenshot(page, "inspect_not_ready")
-        print("Waiting for contacts to load...")
-        time.sleep(20)  # Give async chat list time to populate
+        print("Navigating to chat list...")
+        navigate_to_chat_list(page)
 
         # Save rendered DOM (not just static HTML)
         rendered = page.evaluate("() => document.documentElement.outerHTML")
@@ -418,24 +535,38 @@ def inspect_page(config):
         print("\nJS contact scraper demo (searching sidebar for contacts with colored dots)...")
         demo = page.evaluate("""
             () => {
+                const COLOR_MAP = {
+                    'rgb(19, 161, 14)': 'Available',
+                    'rgb(209, 52, 56)': 'Busy',
+                    'rgb(234, 163, 0)': 'Away',
+                    'rgb(194, 57, 179)': 'Do not disturb',
+                    'rgb(128, 128, 128)': 'Offline',
+                    'rgb(176, 176, 176)': 'Offline'
+                };
                 const names = [];
                 const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
                 let node;
                 while (node = walker.nextNode()) {
                     const text = node.textContent.trim();
-                    // Heuristic: looks like a person name (2+ words, no digits, reasonable length)
-                    if (text.length > 5 && text.length < 35 && text.includes(' ') && !/\\d/.test(text) && !text.includes('notification') && !text.includes('menu')) {
+                    if (text.length > 5 && text.length < 35 && text.includes(' ') && !/[0-9]/.test(text) && !text.includes('notification') && !text.includes('menu')) {
                         const el = node.parentElement;
-                        let container = el.closest('[role=\"listitem\"]') || el.closest('li') || el.parentElement;
+                        let container = el.closest('[role="listitem"]') || el.closest('li') || el.parentElement;
                         if (container) {
-                            const dots = container.querySelectorAll('div, span, svg, i');
-                            for (const dot of dots) {
-                                const rect = dot.getBoundingClientRect();
-                                if (rect.width > 0 && rect.width <= 20 && rect.height > 0 && rect.height <= 20) {
-                                    const style = window.getComputedStyle(dot);
-                                    const bg = style.backgroundColor || style.color;
-                                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && !bg.includes('255, 255, 255')) {
-                                        names.push({name: text, color: bg});
+                            const badges = container.querySelectorAll('.fui-PresenceBadge, [data-tid="presence-badge"], .presence-badge');
+                            for (const badge of badges) {
+                                const svg = badge.querySelector('svg');
+                                if (svg) {
+                                    const fill = window.getComputedStyle(svg).fill;
+                                    if (COLOR_MAP[fill]) {
+                                        names.push({name: text, status: COLOR_MAP[fill], color: fill});
+                                        break;
+                                    }
+                                }
+                                const path = badge.querySelector('svg path');
+                                if (path) {
+                                    const fill = window.getComputedStyle(path).fill;
+                                    if (COLOR_MAP[fill]) {
+                                        names.push({name: text, status: COLOR_MAP[fill], color: fill});
                                         break;
                                     }
                                 }
@@ -448,11 +579,14 @@ def inspect_page(config):
         """)
         if demo:
             for item in demo:
-                print(f"  Found: '{item.get('name')}' with color {item.get('color')}")
+                print(f"  Found: '{item.get('name')}' -> {item.get('status')} ({item.get('color')})")
         else:
             print("  No contacts with colored dots found.")
 
-        input("\nPress ENTER to close browser...")
+        try:
+            input("\nPress ENTER to close browser...")
+        except EOFError:
+            pass
         browser.close()
 
 
