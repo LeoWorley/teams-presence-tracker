@@ -50,10 +50,83 @@ python teams_scraper.py
 python teams_scraper.py --users "Diego Zepeda" "Another Colleague"
 ```
 
-The scraper polls every 30 seconds and appends changes to the same CSV file the Rust tool uses:
+**Track users via config file (no restart needed):**
+
+Edit `scraper/config.json` and add the `users` array:
+```json
+{
+  "users": ["Diego Zepeda", "Another Colleague"],
+  ...
+}
+```
+
+Then run the scraper without `--users`:
+```bash
+python teams_scraper.py
+```
+
+The scraper reloads `config.json` every poll cycle, so you can add or remove users at any time — changes are picked up within ~30 seconds without restarting.
+
+The scraper polls every 30 seconds and appends changes to:
 ```
 %APPDATA%\teams-presence-tracker\presence_history.csv
 ```
+
+## Run at startup (Windows Task Scheduler)
+
+You can run the scraper automatically when Windows boots, even if no user is logged in, using the provided setup script.
+
+**Prerequisites:**
+1. Run `--setup` once so the browser session is saved:
+   ```bash
+   python teams_scraper.py --setup
+   ```
+
+**Option A: Double-click the batch file (easiest)**
+
+Navigate to `scripts/` and double-click:
+```
+Setup Scraper Startup.bat
+```
+
+A UAC prompt will appear — click **Yes** to grant Administrator rights. The script handles the rest.
+
+**Option B: Run the PowerShell script directly**
+
+```powershell
+.\scripts\setup-scraper-task.ps1
+```
+
+If you forgot to open PowerShell as Administrator, the script will automatically restart itself with a UAC prompt — no need to do it manually.
+
+**Track multiple users at startup:**
+
+```powershell
+.\scripts\setup-scraper-task.ps1 -Users "Diego Zepeda","Another Colleague"
+```
+
+**Optional parameters:**
+- `-Users "Name1","Name2"` — list of users to track
+- `-PythonPath "C:\Path\To\python.exe"` — specify Python executable
+- `-ScraperDir "C:\Path\To\scraper"` — specify scraper directory
+
+**Manage the task:**
+```powershell
+Start-ScheduledTask -TaskName "TeamsPresenceScraper"
+Stop-ScheduledTask  -TaskName "TeamsPresenceScraper"
+Get-ScheduledTask   -TaskName "TeamsPresenceScraper"
+```
+
+**Manually edit the task (e.g., to add users to the command line):**
+
+1. Open Task Scheduler (`taskschd.msc`).
+2. Find `TeamsPresenceScraper` in the root of the Task Scheduler Library.
+3. Right-click → **Properties** → **Actions** tab → **Edit**.
+4. In the "Add arguments" field you can add `--users "Name1" "Name2"` after the script path.
+
+However, the easiest way to change users is to edit `scraper/config.json` (see "Track users via config file" above). The scheduled task does not need to be touched — just edit the JSON file and the running scraper picks up the change automatically within one poll interval.
+
+> **Note:** The scraper runs in **headless** mode by default, so it does not need a visible desktop. If you experience issues running without a logged-in user, an alternative is to enable [Windows auto-logon](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/regini) for your account and place the scraper in the Startup folder instead.
 
 ## Debug selectors
 
