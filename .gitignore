@@ -9,3 +9,4 @@ scraper/state/
 # Python
 __pycache__/
 *.pyc
+scraper/config.json
