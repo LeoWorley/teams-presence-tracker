@@ -47,7 +47,7 @@ impl TokenResponse {
     }
 }
 
-pub async fn authenticate(client_id: &str, cache_path: &Path) -> Result<TokenResponse> {
+pub async fn authenticate(client_id: &str, cache_path: &Path, no_interactive: bool) -> Result<TokenResponse> {
     if cache_path.exists() {
         let cached = load_cached_token(cache_path)?;
         if cached.expires_at > chrono::Utc::now().timestamp() {
@@ -60,7 +60,11 @@ pub async fn authenticate(client_id: &str, cache_path: &Path) -> Result<TokenRes
             });
         }
         tracing::info!("Access token expired, refreshing...");
-        return refresh_token(client_id, &cached.refresh_token, cache_path).await;
+        return refresh_token(client_id, &cached.refresh_token, cache_path, no_interactive).await;
+    }
+
+    if no_interactive {
+        bail!("No cached token found and --no-interactive is set. Please authenticate interactively first.");
     }
 
     device_code_flow(client_id, cache_path).await
@@ -142,7 +146,7 @@ async fn device_code_flow(client_id: &str, cache_path: &Path) -> Result<TokenRes
     }
 }
 
-async fn refresh_token(client_id: &str, refresh_token: &str, cache_path: &Path) -> Result<TokenResponse> {
+async fn refresh_token(client_id: &str, refresh_token: &str, cache_path: &Path, no_interactive: bool) -> Result<TokenResponse> {
     let client = Client::new();
     let params = [
         ("grant_type", "refresh_token"),
@@ -163,6 +167,9 @@ async fn refresh_token(client_id: &str, refresh_token: &str, cache_path: &Path) 
 
     if !status.is_success() {
         if body.contains("invalid_grant") {
+            if no_interactive {
+                bail!("Refresh token expired and --no-interactive is set. Please re-authenticate interactively.");
+            }
             tracing::warn!("Refresh token invalid or expired, re-authenticating...");
             return device_code_flow(client_id, cache_path).await;
         }

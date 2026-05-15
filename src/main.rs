@@ -25,21 +25,28 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Parser)]
+struct GlobalRunArgs {
+    /// Polling interval in seconds
+    #[arg(short, long, default_value = "60")]
+    interval: u64,
+    /// Comma-separated list of users to track (email or object ID).
+    /// If omitted, tracks your own presence.
+    #[arg(short, long, value_delimiter = ',')]
+    users: Vec<String>,
+    /// Start a local HTTP dashboard on the given address (e.g. 0.0.0.0:8080)
+    #[arg(long)]
+    serve: Option<String>,
+    /// Fail instead of prompting for interactive authentication.
+    /// Use this when running as a scheduled task or service.
+    #[arg(long)]
+    no_interactive: bool,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Start polling Teams presence and recording changes
-    Run {
-        /// Polling interval in seconds
-        #[arg(short, long, default_value = "60")]
-        interval: u64,
-        /// Comma-separated list of users to track (email or object ID).
-        /// If omitted, tracks your own presence.
-        #[arg(short, long, value_delimiter = ',')]
-        users: Vec<String>,
-        /// Start a local HTTP dashboard on the given address (e.g. 0.0.0.0:8080)
-        #[arg(long)]
-        serve: Option<String>,
-    },
+    Run(GlobalRunArgs),
     /// Show presence history from the database
     History {
         /// Number of records to show
@@ -66,17 +73,17 @@ async fn main() -> Result<()> {
     let config = Config::new(cli.client_id)?;
 
     match cli.command {
-        Commands::Run { interval, users, serve } => {
+        Commands::Run(args) => {
             println!("Starting Teams presence tracker...");
             println!("Data directory: {}", config.data_dir.display());
             println!("Database: {}", config.db_path().display());
-            if !users.is_empty() {
-                println!("Tracking users: {}", users.join(", "));
+            if !args.users.is_empty() {
+                println!("Tracking users: {}", args.users.join(", "));
             } else {
                 println!("Tracking: your own presence");
             }
 
-            if let Some(addr) = serve {
+            if let Some(addr) = &args.serve {
                 let db = config.db_path();
                 let addr = addr.clone();
                 tokio::spawn(async move {
@@ -87,7 +94,7 @@ async fn main() -> Result<()> {
             }
 
             println!("Press Ctrl+C to stop\n");
-            tracker::run_tracker(&config, interval, users).await?;
+            tracker::run_tracker(&config, args.interval, args.users, args.no_interactive).await?;
         }
         Commands::History { limit } => {
             let db_path = config.db_path();

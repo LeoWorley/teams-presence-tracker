@@ -9,11 +9,11 @@ use crate::config::Config;
 use crate::db::record_presence;
 use crate::graph::{get_presence, Presence};
 
-pub async fn run_tracker(config: &Config, interval_secs: u64, users: Vec<String>) -> Result<()> {
+pub async fn run_tracker(config: &Config, interval_secs: u64, users: Vec<String>, no_interactive: bool) -> Result<()> {
     let db_path = config.db_path();
 
     println!("Authenticating with Microsoft Graph...");
-    let mut token = authenticate(&config.client_id, &config.token_cache_path()).await?;
+    let mut token = authenticate(&config.client_id, &config.token_cache_path(), no_interactive).await?;
 
     let target_users = if users.is_empty() {
         vec!["me".to_string()]
@@ -43,7 +43,7 @@ pub async fn run_tracker(config: &Config, interval_secs: u64, users: Vec<String>
 
         if token.is_expired() {
             tracing::info!("Access token expired, refreshing...");
-            token = authenticate(&config.client_id, &config.token_cache_path()).await?;
+            token = authenticate(&config.client_id, &config.token_cache_path(), no_interactive).await?;
         }
 
         for user in &target_users {
