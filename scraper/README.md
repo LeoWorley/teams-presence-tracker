@@ -67,6 +67,27 @@ python teams_scraper.py
 
 The scraper reloads `config.json` every poll cycle, so you can add or remove users at any time — changes are picked up within ~30 seconds without restarting.
 
+**Aliases for privacy:**
+
+You can map real names to display aliases in `config.json`. The scraper still searches for the real name in Teams, but prints and notifies using the alias:
+
+```json
+{
+  "aliases": {
+    "Ramon Diaz": "?",
+    "Diego Zepeda": "Colleague A"
+  }
+}
+```
+
+Output example:
+```
+[2026-05-15 10:00:00] ? status: busy / busy
+[2026-05-15 10:05:00] ? changed: busy / busy -> available / available
+```
+
+Aliases apply to CLI output and ntfy notifications. The real name is still stored in the CSV history.
+
 The scraper polls every 30 seconds and appends changes to:
 ```
 %APPDATA%\teams-presence-tracker\presence_history.csv

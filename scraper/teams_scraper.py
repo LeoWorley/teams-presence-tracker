@@ -56,6 +56,7 @@ DEFAULT_CONFIG = {
         "offline": ["offline", "unknown", "presence unknown"]
     },
     "users": [],
+    "aliases": {},
     "ntfy_topic": None
 }
 
@@ -96,6 +97,11 @@ def parse_status(text: str, mapping: dict) -> tuple:
             if kw in text_lower:
                 return avail, text.strip()
     return "unknown", text.strip()
+
+
+def resolve_alias(name: str, aliases: dict) -> str:
+    """Return the alias for a name if one exists, otherwise the original name."""
+    return aliases.get(name, name)
 
 
 def send_ntfy_notification(topic: str | None, title: str, message: str):
@@ -427,12 +433,13 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                     key = "me"
                     prev = last_status.get(key, "")
                     if f"{avail}/{activity}" != prev:
+                        display = resolve_alias("Self", config.get("aliases", {}))
                         if prev:
-                            print(f"[{now_str}] Self changed: {prev} -> {avail}/{activity}")
-                            send_ntfy_notification(config.get("ntfy_topic"), "Teams Status - Self", f"You are now {avail}")
+                            print(f"[{now_str}] {display} changed: {prev} -> {avail}/{activity}")
+                            send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                         else:
-                            print(f"[{now_str}] Self status: {avail}/{activity}")
-                            send_ntfy_notification(config.get("ntfy_topic"), "Teams Status - Self", f"You are now {avail}")
+                            print(f"[{now_str}] {display} status: {avail}/{activity}")
+                            send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                         append_record("me", avail, activity, raw)
                         last_status[key] = f"{avail}/{activity}"
                 else:
@@ -447,32 +454,37 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                     contacts, not_found = scrape_users_via_js(page, users)
 
                     # Log warnings for missing users
+                    aliases = config.get("aliases", {})
                     for user in not_found:
                         missing_streak[user] = missing_streak.get(user, 0) + 1
                         if missing_streak[user] == 1:
-                            print(f"[{now_str}] ⚠️  {user} not found in chat list (may have scrolled out of view)")
+                            display = resolve_alias(user, aliases)
+                            print(f"[{now_str}] ⚠️  {display} not found in chat list (may have scrolled out of view)")
                         elif missing_streak[user] % 10 == 0:
-                            print(f"[{now_str}] ⚠️  {user} still missing after {missing_streak[user]} polls")
+                            display = resolve_alias(user, aliases)
+                            print(f"[{now_str}] ⚠️  {display} still missing after {missing_streak[user]} polls")
                     # Reset streak for found users
                     for contact in contacts:
                         user = contact["name"]
                         if user in missing_streak and missing_streak[user] > 0:
-                            print(f"[{now_str}] ✓  {user} found again")
+                            display = resolve_alias(user, aliases)
+                            print(f"[{now_str}] ✓  {display} found again")
                         missing_streak[user] = 0
 
                     for contact in contacts:
                         name = contact["name"]
+                        display = resolve_alias(name, config.get("aliases", {}))
                         raw = contact["raw"]
                         avail, activity = parse_status(raw, config.get("status_mapping", {}))
                         key = name
                         prev = last_status.get(key, "")
                         if f"{avail}/{activity}" != prev:
                             if prev:
-                                print(f"[{now_str}] {name} changed: {prev} -> {avail}/{activity}")
-                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {name}", f"{name} is now {avail}")
+                                print(f"[{now_str}] {display} changed: {prev} -> {avail}/{activity}")
+                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                             else:
-                                print(f"[{now_str}] {name} status: {avail}/{activity}")
-                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {name}", f"{name} is now {avail}")
+                                print(f"[{now_str}] {display} status: {avail}/{activity}")
+                                send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                             append_record(name, avail, activity, raw)
                             last_status[key] = f"{avail}/{activity}"
 

@@ -17,6 +17,9 @@
   ],
   "viewport": {"width": 1920, "height": 1080},
   "users": [],
+  "aliases": {
+    "Ramon Diaz": "?"
+  },
   "selectors": {
     "self_presence": {
       "strategies": [
