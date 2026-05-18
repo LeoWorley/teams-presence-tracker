@@ -410,10 +410,11 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 poll_count += 1
 
-                # Hot-reload config users if not overridden by CLI
+                # Hot-reload config users and aliases if not overridden by CLI
                 if use_config_users:
                     fresh_config = load_config()
                     users = fresh_config.get("users", [])
+                    config["aliases"] = fresh_config.get("aliases", {})
                     # Allow poll interval changes too
                     config["poll_interval_seconds"] = fresh_config.get("poll_interval_seconds", config["poll_interval_seconds"])
 
