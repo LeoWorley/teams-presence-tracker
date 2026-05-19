@@ -374,8 +374,9 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
 
     last_status: dict[str, str] = {}
     status_confirm: dict[str, tuple[str, int]] = {}  # key -> (pending_status, count)
+    STARTUP_GRACE_POLLS = 3  # skip notifications for first ~90s while page stabilizes
 
-    def check_status_change(key: str, current: str):
+    def check_status_change(key: str, current: str, in_grace: bool):
         """Debounce status changes: require 2 consecutive polls with the
         same new status before confirming it. Returns (should_notify,
         notify_type, prev_status) or (False, None, None)."""
@@ -394,6 +395,9 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
         if count >= 2:
             last_status[key] = current
             status_confirm.pop(key, None)
+            # Skip notifications during startup grace period
+            if in_grace:
+                return False, None, None
             return True, ("changed" if confirmed else "status"), confirmed
         return False, None, None
 
@@ -448,6 +452,8 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                     except Exception:
                         pass
 
+                in_grace = poll_count <= STARTUP_GRACE_POLLS
+
                 # --- Scrape self presence ---
                 strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
                 raw = try_scrape_self(page, strategies)
@@ -456,7 +462,7 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                     avail, activity = parse_status(raw, config.get("status_mapping", {}))
                     key = "me"
                     current = f"{avail}/{activity}"
-                    should_notify, notify_type, prev = check_status_change(key, current)
+                    should_notify, notify_type, prev = check_status_change(key, current, in_grace)
                     if should_notify:
                         display = resolve_alias("Self", config.get("aliases", {}))
                         if notify_type == "changed":
@@ -476,6 +482,10 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                     time.sleep(1)
 
                     contacts, not_found = scrape_users_via_js(page, users)
+
+                    # Clear pending confirmations for users we couldn't find this poll
+                    for user in not_found:
+                        status_confirm.pop(user, None)
 
                     # Log warnings for missing users
                     aliases = config.get("aliases", {})
@@ -502,7 +512,7 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                         avail, activity = parse_status(raw, config.get("status_mapping", {}))
                         key = name
                         current = f"{avail}/{activity}"
-                        should_notify, notify_type, prev = check_status_change(key, current)
+                        should_notify, notify_type, prev = check_status_change(key, current, in_grace)
                         if should_notify:
                             if notify_type == "changed":
                                 print(f"[{now_str}] {display} changed: {prev} -> {avail}/{activity}")
