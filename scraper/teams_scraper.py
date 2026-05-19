@@ -57,6 +57,7 @@ DEFAULT_CONFIG = {
     },
     "users": [],
     "aliases": {},
+    "track_self": true,
     "ntfy_topic": None
 }
 
@@ -455,8 +456,11 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                 in_grace = poll_count <= STARTUP_GRACE_POLLS
 
                 # --- Scrape self presence ---
-                strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
-                raw = try_scrape_self(page, strategies)
+                if config.get("track_self", True):
+                    strategies = config.get("selectors", {}).get("self_presence", {}).get("strategies", [])
+                    raw = try_scrape_self(page, strategies)
+                else:
+                    raw = None
 
                 if raw:
                     avail, activity = parse_status(raw, config.get("status_mapping", {}))

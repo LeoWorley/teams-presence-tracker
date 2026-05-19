@@ -88,6 +88,17 @@ Output example:
 
 Aliases apply to CLI output and ntfy notifications. The real name is still stored in the CSV history.
 
+**Disable self-tracking:**
+
+If you only want to track other users and not your own presence, set in `config.json`:
+```json
+{
+  "track_self": false
+}
+```
+
+Changes are picked up automatically on the next poll cycle.
+
 The scraper polls every 30 seconds and appends changes to:
 ```
 %APPDATA%\teams-presence-tracker\presence_history.csv

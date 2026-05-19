@@ -20,6 +20,7 @@
   "aliases": {
     "Ramon Diaz": "?"
   },
+  "track_self": true,
   "selectors": {
     "self_presence": {
       "strategies": [
