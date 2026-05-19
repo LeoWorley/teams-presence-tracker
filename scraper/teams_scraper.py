@@ -373,6 +373,29 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
         print("Press Ctrl+C to stop\n")
 
     last_status: dict[str, str] = {}
+    status_confirm: dict[str, tuple[str, int]] = {}  # key -> (pending_status, count)
+
+    def check_status_change(key: str, current: str):
+        """Debounce status changes: require 2 consecutive polls with the
+        same new status before confirming it. Returns (should_notify,
+        notify_type, prev_status) or (False, None, None)."""
+        confirmed = last_status.get(key, "")
+        if current == confirmed:
+            status_confirm.pop(key, None)
+            return False, None, None
+
+        pending, count = status_confirm.get(key, ("", 0))
+        if pending == current:
+            count += 1
+        else:
+            count = 1
+        status_confirm[key] = (current, count)
+
+        if count >= 2:
+            last_status[key] = current
+            status_confirm.pop(key, None)
+            return True, ("changed" if confirmed else "status"), confirmed
+        return False, None, None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -432,17 +455,17 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                 if raw:
                     avail, activity = parse_status(raw, config.get("status_mapping", {}))
                     key = "me"
-                    prev = last_status.get(key, "")
-                    if f"{avail}/{activity}" != prev:
+                    current = f"{avail}/{activity}"
+                    should_notify, notify_type, prev = check_status_change(key, current)
+                    if should_notify:
                         display = resolve_alias("Self", config.get("aliases", {}))
-                        if prev:
+                        if notify_type == "changed":
                             print(f"[{now_str}] {display} changed: {prev} -> {avail}/{activity}")
                             send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                         else:
                             print(f"[{now_str}] {display} status: {avail}/{activity}")
                             send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                         append_record("me", avail, activity, raw)
-                        last_status[key] = f"{avail}/{activity}"
                 else:
                     print(f"[{now_str}] Could not find self presence.")
 
@@ -478,16 +501,16 @@ def run_scraper(config, users: list[str], use_config_users: bool = False):
                         raw = contact["raw"]
                         avail, activity = parse_status(raw, config.get("status_mapping", {}))
                         key = name
-                        prev = last_status.get(key, "")
-                        if f"{avail}/{activity}" != prev:
-                            if prev:
+                        current = f"{avail}/{activity}"
+                        should_notify, notify_type, prev = check_status_change(key, current)
+                        if should_notify:
+                            if notify_type == "changed":
                                 print(f"[{now_str}] {display} changed: {prev} -> {avail}/{activity}")
                                 send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                             else:
                                 print(f"[{now_str}] {display} status: {avail}/{activity}")
                                 send_ntfy_notification(config.get("ntfy_topic"), f"Teams Status - {display}", f"{display} is now {avail}")
                             append_record(name, avail, activity, raw)
-                            last_status[key] = f"{avail}/{activity}"
 
                 # Keep page alive
                 try:
