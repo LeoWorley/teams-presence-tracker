@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     },
     "users": [],
     "aliases": {},
-    "track_self": true,
+    "track_self": True,
     "ntfy_topic": None
 }
 
